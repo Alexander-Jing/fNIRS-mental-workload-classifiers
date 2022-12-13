@@ -13,7 +13,7 @@ else
 fi
 
 export gpu_idx=0
-export data_dir="$YOUR_PATH/fNIRS-mental-workload-classifiers/data/slide_window_data/size_30sec_150ts_stride_3ts/"
+export data_dir="$YOUR_PATH/fNIRS2MW/experiment/fNIRS_data/band_pass_filtered/slide_window_data/size_30sec_150ts_stride_03ts/"
 export window_size=150
 export result_save_rootdir="$YOUR_PATH/fNIRS-mental-workload-classifiers/experiments/subject_specific_models/DeepConvNet/binary/window_size150"
 export classification_task="binary"
