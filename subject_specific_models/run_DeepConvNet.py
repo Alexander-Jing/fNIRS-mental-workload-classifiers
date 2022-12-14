@@ -99,6 +99,7 @@ def train_classifier(args_dict):
     
     start_time = time.time()
     
+    # search for the best hyper-parameter 
     for lr in lrs:
         for dropout in dropouts:
             experiment_name = 'lr{}_dropout{}'.format(lr, dropout)#experiment name: used for indicating hyper setting
@@ -186,7 +187,7 @@ def train_classifier(args_dict):
 #             optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     
             #training loop
-            best_val_accuracy = 0.0
+            best_val_accuracy = 0.0  # the code only store the best epoch model during the training of one hyper-parameter
 
             epoch_train_loss = []
             epoch_train_accuracy = []

@@ -45,6 +45,7 @@ def extract_experiment_performance(experiment_dir, experiment_name):
 
 
 def main(experiment_dir, summary_save_dir):
+    # record the accuracy of every parameter combination in one subject 
     
     experiments = os.listdir(experiment_dir)
     incomplete_experiment_writer = open(os.path.join(summary_save_dir, 'incomplete_experiment_list.txt'), 'w')
