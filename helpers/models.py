@@ -71,7 +71,7 @@ class EEGNet150(nn.Module):
         ) #先不implement最后一层的kernel constraint， 只implement conv2d的constraint
 
     def forward(self, x):
-        x = self.firstConv(x.unsqueeze(1).transpose(2,3))
+        x = self.firstConv(x.unsqueeze(1).transpose(2,3))  # (2,3)转置将150*8转置成8*150
         x = self.depthwiseConv(x)
         x = self.separableConv(x)
         # print(x.shape)

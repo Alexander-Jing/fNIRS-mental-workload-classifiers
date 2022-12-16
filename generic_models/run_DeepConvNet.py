@@ -96,8 +96,8 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
     group_val_set = brain_data.brain_dataset(group_model_sub_val_feature_array, group_model_sub_val_label_array)
 
     #dataloader object
-    cv_train_batch_size = len(group_train_set)
-    cv_val_batch_size = len(group_val_set)
+    cv_train_batch_size = len(group_train_set)  # 要看下这个batch size=35712，应该就是整个group_train_set的数据作为一个batch，所以会超显存
+    cv_val_batch_size = len(group_val_set)  # 11904
     group_train_loader = torch.utils.data.DataLoader(group_train_set, batch_size=cv_train_batch_size, shuffle=True) 
     group_val_loader = torch.utils.data.DataLoader(group_val_set, batch_size=cv_val_batch_size, shuffle=False)
   
@@ -220,7 +220,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
                         inference_start_time = time.time()
                         test_accuracy, test_class_predictions, test_class_labels, test_logits = eval_model(model, test_subjects_dict[test_subject]['sub_test_loader'], device)
                         inference_end_time = time.time()
-                        infernece_time = inference_end_time - inference_start_time
+                        inference_time = inference_end_time - inference_start_time
                         
                         print('test accuracy this epoch for subject: {} is {}'.format(test_subject, test_accuracy))
                         test_subjects_dict[test_subject]['result_save_dict']['bestepoch_test_accuracy'] = test_accuracy
@@ -239,7 +239,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
                 plot_confusion_matrix(test_subjects_dict[test_subject]['result_save_dict']['bestepoch_test_class_predictions'], test_subjects_dict[test_subject]['result_save_dict']['bestepoch_test_class_labels'], confusion_matrix_figure_labels, test_subjects_dict[test_subject]['result_save_subject_resultanalysisdir'], 'test_confusion_matrix.png')
 
                 #save the model at last epoch
-                torch.save(model.state_dict(), os.path.join(test_subjects_dict[test_subject]['result_save_subject_checkpointdir'], 'last_model.statedict'))
+                torch.save(model.state_dict(), os.path.join(test_subjects_dict[test_subject]['result_save_subject_checkpointdir'], 'last_model.statedict'))  # they both save the same best_model and last_model for every subject in the bucket
 
 
                 #save result_save_dict
