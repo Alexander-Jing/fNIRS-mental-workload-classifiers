@@ -105,8 +105,8 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
     cuda = torch.cuda.is_available()
     if cuda:
         print('Detected GPUs', flush = True)
-        device = torch.device('cuda')
-#         device = torch.device('cuda:{}'.format(gpu_idx))
+        # device = torch.device('cuda')
+        device = torch.device('cuda:{}'.format(gpu_idx))
     else:
         print('DID NOT detect GPUs', flush = True)
         device = torch.device('cpu')

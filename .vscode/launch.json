@@ -14,7 +14,7 @@
             "justMyCode": true,
             "args": [
                 "--gpu_idx", "0",
-                "--data_dir", "/home/jingyitao/workspace/fNIRS_models/code_data_tufts/fNIRS2MW/experiment/fNIRS_data/band_pass_filtered/slide_window_data/size_30sec_150ts_stride_03ts/",
+                "--data_dir", "/home/jyt/workspace/fNIRS_models/code_data_tufts/fNIRS2MW/experiment/fNIRS_data/band_pass_filtered/slide_window_data/size_30sec_150ts_stride_03ts/",
                 "--window_size", "150",
                 "--classification_task", "binary",
                 "--setting", "64vs4_TestBucket1",
@@ -23,7 +23,7 @@
                 "--restore_file", "None",
             ],
             "env": {
-                "YOUR_PATH":"/home/jingyitao/workspace/fNIRS_models/code_data_tufts",
+                "YOUR_PATH":"/home/jyt/workspace/fNIRS_models/code_data_tufts",
                 "scenario":"64vs4",
                 "bucket":"TestBucket1",
             }

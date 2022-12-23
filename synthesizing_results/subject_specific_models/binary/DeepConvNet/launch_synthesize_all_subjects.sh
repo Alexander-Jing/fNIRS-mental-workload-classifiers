@@ -12,6 +12,7 @@ else
     ACTION_NAME=$1
 fi
 
+export YOUR_PATH="/home/jyt/workspace/fNIRS_models/code_data_tufts"
 
 for experiment in window_size150
 do
