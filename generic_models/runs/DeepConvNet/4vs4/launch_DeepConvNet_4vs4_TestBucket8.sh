@@ -12,8 +12,9 @@ else
     ACTION_NAME=$1
 fi
 
+export YOUR_PATH="/home/jyt/workspace/fNIRS_models/code_data_tufts"
 export gpu_idx=0
-export data_dir="$YOUR_PATH/fNIRS-mental-workload-classifiers/data/slide_window_data/size_30sec_150ts_stride_3ts"
+export data_dir="$YOUR_PATH/fNIRS2MW/experiment/fNIRS_data/band_pass_filtered/slide_window_data/size_30sec_150ts_stride_03ts/"
 export window_size=150
 export classification_task="binary"
 export scenario="4vs4"
@@ -29,6 +30,6 @@ if [[ $ACTION_NAME == "submit" ]]; then
 
 elif [[ $ACTION_NAME == "run_here" ]]; then
     ## Use this line to just run interactively
-    bash $YOUR_PATH/fNIRS-mental-workload-classifiers/generic_models/runst/do_experiment_DeepConvNet.slurm
+    bash $YOUR_PATH/fNIRS-mental-workload-classifiers/generic_models/runs/do_experiment_DeepConvNet.slurm
 fi
 

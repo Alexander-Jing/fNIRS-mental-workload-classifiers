@@ -12,10 +12,11 @@ else
     ACTION_NAME=$1
 fi
 
+export YOUR_PATH="/home/jyt/workspace/fNIRS_models/code_data_tufts"
 
 for SubjectId_of_interest in 86 56 72 79
 do
-    export experiment_dir="YOUR_PATH/fNIRS-mental-workload-classifiers/experiments/generic_models/DeepConvNet/binary/64vs4/TestBucket1/$SubjectId_of_interest"
+    export experiment_dir="$YOUR_PATH/fNIRS-mental-workload-classifiers/experiments/generic_models/DeepConvNet/binary/64vs4/TestBucket1/$SubjectId_of_interest"
     
     echo "Current experiment_dir is $experiment_dir"
     
