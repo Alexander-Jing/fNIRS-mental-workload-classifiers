@@ -217,7 +217,7 @@ def train_one_epoch(model, optimizer, criterion, train_loader, device):
     loss_avg = RunningAverage()
     for i, (data_batch, labels_batch) in enumerate(train_loader):
 #         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
-        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
         #labels: tensor on cpu, torch.Size([batch_size])
         
         data_batch = data_batch.to(device) #put inputs to device
@@ -231,6 +231,68 @@ def train_one_epoch(model, optimizer, criterion, train_loader, device):
         #loss: tensor (scalar) on gpu, torch.Size([])
         loss = criterion(output_batch, labels_batch)
         
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+class LabelSmoothing(torch.nn.Module):
+    """NLL loss with label smoothing."""
+    def __init__(self, smoothing=0.1):
+        super(LabelSmoothing, self).__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+
+    def forward(self, x, target):
+        logprobs = torch.nn.functional.log_softmax(x, dim=-1)
+        nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
+        nll_loss = nll_loss.squeeze(1)
+        smooth_loss = -logprobs.mean(dim=-1)
+        loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+        return loss.mean()
+
+def train_one_epoch_fNIRS_T(model, optimizer, criterion, train_loader, device, epoch):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    flooding_level = [0.40, 0.38, 0.35]
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        data_batch = data_batch.to(device) #put inputs to device
+        labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        loss = criterion(output_batch, labels_batch)
+        
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
         #update running average of the loss
         loss_avg.update(loss.item())
         
