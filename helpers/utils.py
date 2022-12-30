@@ -260,6 +260,18 @@ class LabelSmoothing(torch.nn.Module):
         loss = self.confidence * nll_loss + self.smoothing * smooth_loss
         return loss.mean()
 
+def data_transform(data_batch):
+    # transpose the batch data from tufts dataset to the input form of fNIRS-preT
+    x = torch.transpose(data_batch, 1,2)  # [b, 150, 8]->[b, 8, 150]
+    x = torch.stack(list(x.chunk(2, dim=1)), dim=0)
+    x = torch.transpose(x, 0,1)  # [b, 8, 150]->[b, 2, 4, 150]
+    x = torch.stack(list(x.chunk(2, dim=2)), dim=0)
+    x = torch.transpose(x, 0,1)
+    x = torch.transpose(x, 1,2)  # [b, 2, 4, 150]->[b, 2, 2, 2, 150]
+    x = torch.flatten(x, 3,4)  # [b, 2, 2, 2, 150]->[b, 2, 2, 300]
+    
+    return x
+
 def train_one_epoch_fNIRS_T(model, optimizer, criterion, train_loader, device, epoch):
     # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
     flooding_level = [0.40, 0.38, 0.35]
@@ -271,6 +283,9 @@ def train_one_epoch_fNIRS_T(model, optimizer, criterion, train_loader, device, e
         #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
         #labels: tensor on cpu, torch.Size([batch_size])
         
+        data_batch = data_transform(data_batch)  # transform the data form to the input of fNIRS-preT
+        #  input shape of fNIRS-preT is [B, 2, fNIRS channels, sampling points]
+
         data_batch = data_batch.to(device) #put inputs to device
         labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
 
@@ -307,6 +322,54 @@ def train_one_epoch_fNIRS_T(model, optimizer, criterion, train_loader, device, e
     average_loss_this_epoch = loss_avg()
     return average_loss_this_epoch
 
+
+def eval_model_fNIRST(model, eval_loader, device):
+    
+    # evaluation for the fNIRS-preT models with an input of [B, 2, fNIRS channels, sampling points]
+    model.eval()
+    
+#     predicted_array = None # 1d numpy array, [batch_size * num_batches]
+    labels_array = None # 1d numpy array, [batch_size * num_batches]
+    probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
+    
+    for data_batch, labels_batch in eval_loader:#test_loader
+        print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #labels: tensor on cpu, torch.Size([batch_size])
+       
+        data_batch = data_transform(data_batch)  # transform the data form to the input of fNIRS-preT
+        # input shape of fNIRS-preT is [B, 2, fNIRS channels, sampling points]
+
+        data_batch = data_batch.to(device) #put inputs to device
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #extract data from torch variable, move to cpu, convert to numpy arrays    
+        if labels_array is None:
+#             label_array = labels.numpy()
+            labels_array = labels_batch.data.cpu().numpy()
+            
+        else:
+            labels_array = np.concatenate((labels_array, labels_batch.data.cpu().numpy()), axis=0)#np.concatenate without axis will flattened to 1d array
+        
+        
+        if probabilities_array is None:
+            probabilities_array = output_batch.data.cpu().numpy()
+        else:
+            probabilities_array = np.concatenate((probabilities_array, output_batch.data.cpu().numpy()), axis = 0) #concatenate on batch dimension: torch.Size([batch_size * num_batches, num_classes])
+            
+    class_predictions_array = probabilities_array.argmax(1)
+#     print('class_predictions_array.shape: {}'.format(class_predictions_array.shape))
+
+#     class_labels_array = onehot_labels_array.argmax(1)
+    labels_array = labels_array
+    accuracy = (class_predictions_array == labels_array).mean() * 100
+#     accuracy = (class_predictions_array == class_labels_array).mean() * 100
+    
+    
+    return accuracy, class_predictions_array, labels_array, probabilities_array
 
 def eval_model(model, eval_loader, device):
     

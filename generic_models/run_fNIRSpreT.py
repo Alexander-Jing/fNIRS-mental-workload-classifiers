@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(YOUR_PATH, 'fNIRS-mental-workload-classifiers/he
 import models
 import brain_data
 from utils import generic_GetTrainValTestSubjects, seed_everything, makedir_if_not_exist, plot_confusion_matrix, save_pickle, train_one_epoch, eval_model, save_training_curves_FixedTrainValSplit, write_performance_info_FixedTrainValSplit, write_program_time, write_inference_time
-from utils import LabelSmoothing, train_one_epoch_fNIRS_T
+from utils import LabelSmoothing, train_one_epoch_fNIRS_T, eval_model_fNIRST
 
 # from sklearn.model_selection import KFold
 
@@ -99,7 +99,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
     #dataloader object
     cv_train_batch_size = len(group_train_set)  # 要看下这个batch size=35712，应该就是整个group_train_set的数据作为一个batch，所以会超显存
     cv_val_batch_size = len(group_val_set)  # 11904
-    group_train_loader = torch.utils.data.DataLoader(group_train_set, batch_size=cv_train_batch_size, shuffle=True) 
+    group_train_loader = torch.utils.data.DataLoader(group_train_set, batch_size=128, shuffle=True) # according to the fNIRS-preT paper, we set the batch size 128
     group_val_loader = torch.utils.data.DataLoader(group_val_set, batch_size=cv_val_batch_size, shuffle=False)
   
     #GPU setting
@@ -172,7 +172,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
 
         test_subjects_dict[test_subject]['result_save_dict'] = dict()
         
-    sampling_points = 150
+    sampling_points = 300
     #create model
     model = model_to_use(n_class=2, sampling_point=sampling_points, dim=64, depth=6, heads=8, mlp_dim=64).to(device)
 
@@ -199,8 +199,8 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
 
     for epoch in trange(n_epoch, desc='1-fold cross validation'):
         average_loss_this_epoch = train_one_epoch_fNIRS_T(model, optimizer, criterion, group_train_loader, device, epoch)
-        val_accuracy, _, _, _ = eval_model(model, group_val_loader, device)
-        train_accuracy, _, _ , _ = eval_model(model, group_train_loader, device)
+        val_accuracy, _, _, _ = eval_model_fNIRST(model, group_val_loader, device)
+        train_accuracy, _, _ , _ = eval_model_fNIRST(model, group_train_loader, device)
 
         epoch_train_loss.append(average_loss_this_epoch)
         epoch_train_accuracy.append(train_accuracy)
@@ -218,7 +218,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
                 torch.save(model.state_dict(), os.path.join(test_subjects_dict[test_subject]['result_save_subject_checkpointdir'], 'best_model.statedict'))
                                         
                 inference_start_time = time.time()
-                test_accuracy, test_class_predictions, test_class_labels, test_logits = eval_model(model, test_subjects_dict[test_subject]['sub_test_loader'], device)
+                test_accuracy, test_class_predictions, test_class_labels, test_logits = eval_model_fNIRST(model, test_subjects_dict[test_subject]['sub_test_loader'], device)
                 inference_end_time = time.time()
                 inference_time = inference_end_time - inference_start_time
                 

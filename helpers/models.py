@@ -299,16 +299,16 @@ class fNIRS_T(nn.Module):
         num_channels = 100
 
         self.to_patch_embedding = nn.Sequential(
-            nn.Conv2d(in_channels=2, out_channels=8, kernel_size=(5, 30), stride=(1, 4)),
+            nn.Conv2d(in_channels=2, out_channels=8, kernel_size=(2, 30), stride=(1, 3), padding=(1, 0)),
             Rearrange('b c h w  -> b h (c w)'),
             # output width * out channels --> dim
-            nn.Linear((math.floor((sampling_point-30)/4)+1)*8, dim),
+            nn.Linear((math.floor((sampling_point-30)/3)+1)*8, dim),
             nn.LayerNorm(dim))
 
         self.to_channel_embedding = nn.Sequential(
-            nn.Conv2d(in_channels=2, out_channels=8, kernel_size=(1, 30), stride=(1, 4)),
+            nn.Conv2d(in_channels=2, out_channels=8, kernel_size=(1, 30), stride=(1, 3)),
             Rearrange('b c h w  -> b h (c w)'),
-            nn.Linear((math.floor((sampling_point-30)/4)+1)*8, dim),
+            nn.Linear((math.floor((sampling_point-30)/3)+1)*8, dim),
             nn.LayerNorm(dim))
 
         self.pos_embedding_patch = nn.Parameter(torch.randn(1, num_patches + 1, dim))

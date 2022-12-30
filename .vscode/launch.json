@@ -5,11 +5,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: run_fNIRSTpre.py",
+            "name": "Python: run_fNIRSpreT.py",
             "type": "python",
             "request": "launch",
             "cwd": "${fileDirname}",
-            "program": "${workspaceFolder}/generic_models/run_fNIRSTpre.py",
+            "program": "${workspaceFolder}/generic_models/run_fNIRSpreT.py",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
@@ -18,7 +18,7 @@
                 "--window_size", "150",
                 "--classification_task", "binary",
                 "--setting", "64vs4_TestBucket1",
-                "--result_save_rootdir", "${workspaceFolder}/experiments/generic_models/DeepConvNet/binary/64vs4/TestBucket1",
+                "--result_save_rootdir", "${workspaceFolder}/experiments/generic_models/fNIRSpreT_debug/binary/64vs4/TestBucket1",
                 "--n_epoch", "120",
                 "--restore_file", "None",
             ],
