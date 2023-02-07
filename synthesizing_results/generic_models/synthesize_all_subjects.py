@@ -27,21 +27,22 @@ def main(experiment_dir, summary_save_dir):
             subject_this_bucket_list = os.listdir(os.path.join(experiment_dir, bucket))
         
             for subject_id in subject_this_bucket_list:
-                this_subject_summary_csv_path = os.path.join(experiment_dir, bucket, str(subject_id), 'hypersearch_summary/hypersearch_summary.csv')
+                if not (subject_id=='inference_time.txt' or subject_id=='program_time.txt'):
+                    this_subject_summary_csv_path = os.path.join(experiment_dir, bucket, str(subject_id), 'hypersearch_summary/hypersearch_summary.csv')
 
-                this_subject_summary_df = pd.read_csv(this_subject_summary_csv_path)
+                    this_subject_summary_df = pd.read_csv(this_subject_summary_csv_path)
 
-                this_subject_selected_setting = this_subject_summary_df.sort_values(by=['validation_accuracy'], ascending=False).iloc[0]
+                    this_subject_selected_setting = this_subject_summary_df.sort_values(by=['validation_accuracy'], ascending=False).iloc[0]
 
-                this_subject_dict = {}
-                this_subject_max_validation_accuracy = this_subject_selected_setting.validation_accuracy
-                this_subject_corresponding_test_accuracy = this_subject_selected_setting.test_accuracy
-                this_subject_performance_string = this_subject_selected_setting.performance_string
-                this_subject_experiment_folder = this_subject_selected_setting.experiment_folder
+                    this_subject_dict = {}
+                    this_subject_max_validation_accuracy = this_subject_selected_setting.validation_accuracy
+                    this_subject_corresponding_test_accuracy = this_subject_selected_setting.test_accuracy
+                    this_subject_performance_string = this_subject_selected_setting.performance_string
+                    this_subject_experiment_folder = this_subject_selected_setting.experiment_folder
 
-                this_subject_dict.update(subject_id=subject_id, bucket=bucket, max_validation_accuracy=this_subject_max_validation_accuracy, corresponding_test_accuracy=this_subject_corresponding_test_accuracy, performance_string=this_subject_performance_string, experiment_folder=this_subject_experiment_folder)
+                    this_subject_dict.update(subject_id=subject_id, bucket=bucket, max_validation_accuracy=this_subject_max_validation_accuracy, corresponding_test_accuracy=this_subject_corresponding_test_accuracy, performance_string=this_subject_performance_string, experiment_folder=this_subject_experiment_folder)
 
-                writer.writerow(this_subject_dict)
+                    writer.writerow(this_subject_dict)
             
 
 if __name__=="__main__":

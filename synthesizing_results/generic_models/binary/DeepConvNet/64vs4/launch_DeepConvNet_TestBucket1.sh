@@ -24,11 +24,11 @@ do
 
     if [[ $ACTION_NAME == 'submit' ]]; then
         ## Use this line to submit the experiment to the batch scheduler
-        sbatch < YOUR_PATH/fNIRS-mental_workload-classifiers/synthesizing_results/generic_models/binary/DeepConvNet/synthesize_hypersearch_DeepConvNet_for_a_subject.slurm
+        sbatch < $YOUR_PATH/fNIRS-mental-workload-classifiers/synthesizing_results/generic_models/binary/DeepConvNet/synthesize_hypersearch_DeepConvNet_for_a_subject.slurm
     
     elif [[ $ACTION_NAME == 'run_here' ]]; then
         ## Use this line to just run interactively
-        bash YOUR_PATH/fNIRS-mental_workload-classifiers/synthesizing_results/generic_models/binary/DeepConvNet/synthesize_hypersearch_DeepConvNet_for_a_subject.slurm
+        bash $YOUR_PATH/fNIRS-mental-workload-classifiers/synthesizing_results/generic_models/binary/DeepConvNet/synthesize_hypersearch_DeepConvNet_for_a_subject.slurm
     fi
     
 done

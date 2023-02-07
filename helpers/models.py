@@ -382,3 +382,402 @@ class fNIRS_PreT(nn.Module):
         img = self.pre(img)
         x = self.fNIRS_T(img)
         return x
+
+class PositionalEncoding(nn.Module):
+    "Implement the PE function."
+
+    def __init__(self, dim, dropout=0., max_len=500):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, dim)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, dim, 2) *
+                             -(math.log(10000.0) / dim))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + Variable(self.pe[:, :x.size(1)],
+                         requires_grad=False)
+        return self.dropout(x)
+
+
+
+class Ours_T(nn.Module):
+    """
+    ours-T model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = 8 * patch_length
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 8, 5, 30] -> [b, 5, 8, 30]
+            Rearrange('b h w1 w2 -> b h (w1 w2)')  # [b, 5, 8, 30] -> [b, 5, 240]          
+        )
+
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, num_patches + 1, dim))
+        #self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, n_class))
+
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        #x = self.pos_embedding_patch(x)
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+
+        return self.mlp_head(x)  
+
+
+class Ours_ConvT(nn.Module):
+    """
+    ours-ConvT model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = 16 * patch_length
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            nn.Conv2d(8, 16, kernel_size=(1,5), stride=(1,1), padding=(0,2)),  # [b, 8, 5, 30] -> [b, 16, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 16, 5, 30] -> [b, 5, 16, 30]
+            Rearrange('b h w1 w2 -> b h (w1 w2)'),  # [b, 5, 16, 30] -> [b, 5, 480]
+        )            
+        
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, 1000, dim))
+        #self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, n_class))
+
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+
+        return self.mlp_head(x)  
+
+class Ours_T_1(nn.Module):
+    """
+    ours-T model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = patch_length*4
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 8, 5, 30] -> [b, 5, 8, 30]
+            Rearrange('b h (w1 w2) w3 -> b h w1 w2 w3', w1=2),  # [b, 5, 8, 30] -> [b, 5, 2, 4, 30]
+            Rearrange('b h w1 w2 w3 -> b (h w1) (w2 w3)')  # [b, 5, 2, 4, 30] -> [b, 10, 120]          
+        )
+
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, 1000, dim))
+        #self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, 128),
+            nn.Linear(128, n_class))
+
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        #x = self.pos_embedding_patch(x)
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+
+        return self.mlp_head(x)
+
+class Ours_ConvT_1(nn.Module):
+    """
+    ours-ConvT model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = 8 * patch_length
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            nn.Conv2d(8, 16, kernel_size=(1,5), stride=(1,1), padding=(0,2)),  # [b, 8, 5, 30] -> [b, 16, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 16, 5, 30] -> [b, 5, 16, 30]
+            Rearrange('b h (w1 w2) w3 -> b h w1 w2 w3',w1=2), # [b, 5, 16, 30] -> [b, 5, 2, 8, 30]
+            Rearrange('b h w1 w2 w3 -> b (h w1) (w2 w3)'),  # [b, 5, 2, 8, 30] -> [b, 10, 240]
+        )            
+        
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, 1000, dim))
+        #self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, n_class))
+
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+
+        return self.mlp_head(x)  
+
+class Ours_T_3(nn.Module):
+    """
+    ours-T model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = 8 * patch_length
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 8, 5, 30] -> [b, 5, 8, 30]
+            Rearrange('b h w1 w2 -> b h (w1 w2)')  # [b, 5, 8, 30] -> [b, 5, 240]          
+        )
+
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, num_patches + 1, dim))
+        # self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, n_class))
+        self.mlp_head_chunk = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, 4))
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        #x = self.pos_embedding_patch(x)
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+
+        return self.mlp_head(x), self.mlp_head_chunk(x)
+
+class Ours_T_1_4(nn.Module):
+    """
+    ours-T model
+
+    Args:
+        n_class: number of classes.
+        sampling_points: Input shape is [B, sampling points, fNIRS channels]
+        patch_length: the length of the patch for input fNIRS signals. Input shape is [B, sampling points, fNIRS channels],
+                    after dividing the patches, the size of input is [b, sampling_points/patch_length, 8*patch_length]
+        dim: last dimension of output tensor after linear transformation.
+        depth: number of Transformer blocks.
+        heads: number of the multi-head self-attention.
+        mlp_dim: dimension of the MLP layer.
+        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
+        dim_head: dimension of the multi-head self-attention, default=64.
+        dropout: dropout rate, default=0.
+        emb_dropout: dropout for patch embeddings, default=0.
+    """
+    def __init__(self, n_class, sampling_points, patch_length, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
+        super().__init__()
+        num_patches = int(sampling_points/patch_length)
+        dim_patch = patch_length*4
+
+        self.to_patch_embedding = nn.Sequential(  # in our settings, we use patch_length = 30
+            Rearrange('b h w -> b w h'),  # [b, 150, 8] -> [b, 8, 150]
+            Rearrange('b h (w1 w2) -> b h w1 w2', w2=patch_length), # [b, 8, 150] -> [b, 8, 5, 30]
+            Rearrange('b h w1 w2 -> b w1 h w2'),  # [b, 8, 5, 30] -> [b, 5, 8, 30]
+            Rearrange('b h (w1 w2) w3 -> b h w1 w2 w3', w1=2),  # [b, 5, 8, 30] -> [b, 5, 2, 4, 30]
+            Rearrange('b h w1 w2 w3 -> b (h w1) (w2 w3)')  # [b, 5, 2, 4, 30] -> [b, 10, 120]          
+        )
+
+        self.to_transfomer = nn.Linear(dim_patch, dim) if dim_patch != dim else nn.Identity()
+        self.pos_embedding_patch = nn.Parameter(torch.randn(1, 100, dim))
+        #self.pos_embedding_patch = PositionalEncoding(dim)  # sine cosine position embedding  
+
+        self.cls_token_patch = nn.Parameter(torch.randn(1, 1, dim))
+        self.dropout_patch = nn.Dropout(emb_dropout)
+        self.transformer_patch = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+
+        self.pool = pool
+        self.to_latent = nn.Identity()
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, 128),
+            nn.Linear(128, n_class))
+
+
+    def forward(self, img, mask=None):
+
+        x = self.to_patch_embedding(img)
+        x = self.to_transfomer(x)
+        b, n, _ = x.shape
+        cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding_patch[:, :(n + 1)]
+        #x = self.pos_embedding_patch(x)
+        x = self.dropout_patch(x)
+        x = self.transformer_patch(x, mask)
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]  # use the classification token
+        y = self.mlp_head(x)
+
+        return x, y  # return the cls feature x and the mlp classification output y

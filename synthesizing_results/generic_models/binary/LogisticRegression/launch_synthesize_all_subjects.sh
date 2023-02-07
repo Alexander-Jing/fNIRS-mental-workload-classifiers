@@ -12,10 +12,11 @@ else
     ACTION_NAME=$1
 fi
 
+export YOUR_PATH="/home/jyt/workspace/fNIRS_models/code_data_tufts"
 
-for experiment in 64vs4 16vs4 4vs4
+for experiment in 64vs4 # 16vs4 4vs4
 do
-    export experiment_dir="YOUR_PATH/fNIRS-mental-workload-classifiers/experiments/generic_models/LogisticRegression/binary/$experiment"
+    export experiment_dir="$YOUR_PATH/fNIRS-mental-workload-classifiers/experiments/generic_models/LogisticRegression/four_class/$experiment"
     
     echo "Current experiment_dir is $experiment_dir"
     
@@ -23,11 +24,11 @@ do
 
     if [[ $ACTION_NAME == 'submit' ]]; then
         ## Use this line to submit the experiment to the batch scheduler
-        sbatch < YOUR_PATH/fNIRS-mental_workload-classifiers/synthesizing_results/generic_models/binary/LogisticRegression/synthesize_all_subjects.slurm
+        sbatch < $YOUR_PATH/fNIRS-mental-workload-classifiers/synthesizing_results/generic_models/binary/LogisticRegression/synthesize_all_subjects.slurm
     
     elif [[ $ACTION_NAME == 'run_here' ]]; then
         ## Use this line to just run interactively
-        bash YOUR_PATH/fNIRS-mental_workload-classifiers/synthesizing_results/generic_models/binary/LogisticRegression/synthesize_all_subjects.slurm
+        bash $YOUR_PATH/fNIRS-mental-workload-classifiers/synthesizing_results/generic_models/binary/LogisticRegression/synthesize_all_subjects.slurm
     fi
     
 done

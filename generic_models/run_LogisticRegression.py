@@ -44,9 +44,9 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
         data_loading_function = brain_data.read_subject_csv_binary
         confusion_matrix_figure_labels = ['0back', '2back']
         
-#     elif classification_task == 'four_class':
-#         data_loading_function = brain_data.read_subject_csv
-#         confusion_matrix_figure_labels = ['0back', '1back', '2back', '3back']
+    elif classification_task == 'four_class':
+        data_loading_function = brain_data.read_subject_csv
+        confusion_matrix_figure_labels = ['0back', '1back', '2back', '3back']
         
     else:
         raise NameError('not supported classification type')
@@ -99,7 +99,7 @@ def train_classifier(args_dict, train_subjects, val_subjects, test_subjects):
             sub_feature_array, sub_label_array = data_loading_function(os.path.join(data_dir, 'sub_{}.csv'.format(test_subject)), num_chunk_this_window_size=num_chunk_this_window_size)
             
             sub_data_len = len(sub_label_array)
-            assert sub_data_len == int(num_chunk_this_window_size/2), 'subject {} len is not {} for binary classification'.format(test_subject, int(num_chunk_this_window_size/2))
+            assert sub_data_len == int(num_chunk_this_window_size), 'subject {} len is not {} for binary classification'.format(test_subject, int(num_chunk_this_window_size/2))
             half_sub_data_len = int(sub_data_len/2)
             print('half_sub_data_len: {}'.format(half_sub_data_len), flush=True)
             

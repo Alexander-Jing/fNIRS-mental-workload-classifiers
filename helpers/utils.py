@@ -9,12 +9,17 @@ import logging
 import shutil
 import torch.nn.functional as F
 import json
+import math
 
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import confusion_matrix as sklearn_cm
 import seaborn as sns
+
+from einops import rearrange, repeat
+from torch import nn, einsum
+from einops.layers.torch import Rearrange
 
 def load_pickle(result_dir, filename):
     with open(os.path.join(result_dir, filename), 'rb') as f:
@@ -181,7 +186,29 @@ def write_performance_info_FixedTrainValSplit(model_state_dict, result_save_subj
         file_writer.write('total elemets in this model NA, sklearn model')
     
     file_writer.close()
+
+def write_performance_info_FixedTrainValSplit_1(model_state_dict, result_save_subject_resultanalysisdir, combination_test_accuracy, corresponding_test_accuracy):
+    #create file writer
+    file_writer = open(os.path.join(result_save_subject_resultanalysisdir, 'performance.txt'), 'w')
     
+    #write performance to file
+    file_writer.write('combination_test_accuracy: {}\n'.format(combination_test_accuracy))
+    file_writer.write('highest validation accuracy corresponding test accuracy: {}\n'.format(corresponding_test_accuracy))
+    #write model parameters to file
+    file_writer.write('Model parameters:\n')
+    
+    if model_state_dict != 'NA':
+        total_elements = 0
+        for name, tensor in model_state_dict.items():
+            file_writer.write('layer {}: {} parameters\n'.format(name, torch.numel(tensor)))
+            total_elements += torch.numel(tensor)
+        file_writer.write('total elemets in this model: {}'.format(total_elements))
+    else:
+        file_writer.write('total elemets in this model NA, sklearn model')
+    
+    file_writer.close()
+
+
 def write_initial_test_accuracy(result_save_subject_resultanalysisdir, initial_test_accuracy):
     #create file writer
     file_writer = open(os.path.join(result_save_subject_resultanalysisdir, 'initial_test_accuracy.txt'), 'w')
@@ -322,6 +349,499 @@ def train_one_epoch_fNIRS_T(model, optimizer, criterion, train_loader, device, e
     average_loss_this_epoch = loss_avg()
     return average_loss_this_epoch
 
+def train_one_epoch_Ours_T(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        #  input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+        labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        loss = criterion(output_batch, labels_batch)
+        
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:  # pretrain 10; train/finetune 30
+            b = flooding_level[0]
+        elif epoch < 50:  # pretrain 30; train/finetune 50
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+def train_one_epoch_Ours_T_chunk(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        #  input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+        labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch, output_chunk = model(data_batch)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        loss = criterion(output_batch, labels_batch[:, 0])
+        loss_chunk = criterion(output_chunk, labels_batch[:, 1])
+        loss_all = loss + 0.1*loss_chunk
+
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss_all = (loss_all - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss_all.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss_all.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+def train_one_epoch_Ours_T_finetune(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        #  input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+        labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch, output_chunk = model(data_batch)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        loss = criterion(output_batch, labels_batch[:, 0])
+        # loss_chunk = criterion(output_chunk, labels_batch[:, 1])
+        loss_all = loss #+ 0.5 * loss_chunk
+
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss_all = (loss_all - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss_all.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss_all.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+def train_one_epoch_Ours_T_Norm(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        # normalization of the input batch
+        """
+        data_batch_mean = data_batch.mean(dim=1).unsqueeze(dim=1)
+        data_batch_std = data_batch.std(dim=1).unsqueeze(dim=1)
+        data_batch = (data_batch-data_batch_mean)/data_batch_std
+        """
+        data_batch_max = torch.max(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch_min = torch.min(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch = (data_batch - data_batch_min)/(data_batch_max-data_batch_min)
+
+        #  input shape of ours-T is [B, patches, patch_size]
+        data_batch = data_batch.to(device) #put inputs to device
+        labels_batch = labels_batch.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        loss = criterion(output_batch, labels_batch)
+        
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+
+def train_one_epoch_Ours_T_Cluster(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        # normalization of the input batch
+        """
+        data_batch_mean = data_batch.mean(dim=1).unsqueeze(dim=1)
+        data_batch_std = data_batch.std(dim=1).unsqueeze(dim=1)
+        data_batch = (data_batch-data_batch_mean)/data_batch_std
+        """
+        """
+        data_batch_max = torch.max(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch_min = torch.min(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch = (data_batch - data_batch_min)/(data_batch_max-data_batch_min)
+        """
+        # randomly select the indexes from the data_batch and labels_batch  
+        b,_,_ = data_batch.shape
+        index = random.sample(range(b), int(b/2))
+        index_left = np.delete(np.arange(b), index)
+        data_batch_0 = torch.index_select(data_batch, 0, torch.LongTensor(index))
+        data_batch_1 = torch.index_select(data_batch, 0, torch.LongTensor(index_left))
+        labels_batch_0 = torch.index_select(labels_batch, 0, torch.LongTensor(index))
+        labels_batch_1 = torch.index_select(labels_batch, 0, torch.LongTensor(index_left))
+
+        #  input shape of ours-T is [B, patches, patch_size]
+        data_batch_0 = data_batch_0.to(device) #put inputs to device
+        data_batch_1 = data_batch_1.to(device)
+        labels_batch_0 = labels_batch_0.to(device)
+        labels_batch_1 = labels_batch_1.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_cls_0, output_batch_0 = model(data_batch_0)
+        output_cls_1, output_batch_1 = model(data_batch_1)
+        
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        clu_loss = 1/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+            -2/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum()
+        cls_loss = criterion(output_batch_0, labels_batch_0) + criterion(output_batch_1, labels_batch_1)
+        loss = 0.001*clu_loss + cls_loss  # clustering and classification loss
+        # the loss weight is about from 0.001 to 0.01 
+
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+def add_noise(input_batch, channel_num, step_num, channels=8, time_steps=150):
+    b,_,_ = input_batch.shape
+    input_batch = rearrange(input_batch, 'b c h -> b h c')  # [b, 8, 150]
+    # input_batch = input_batch.numpy()  # tranform to numpy
+    select_channels = random.sample(range(channels), int(channel_num))
+    select_steps = random.sample(range(time_steps), int(step_num))  # select time and channels
+    for i in range(b):
+        for select_channel in select_channels:
+            mean = input_batch[i, select_channel, :].mean()
+            std = input_batch[i, select_channel, :].std()
+            input_batch[i, select_channel, torch.tensor(select_steps)] = \
+                input_batch[i, select_channel, torch.tensor(select_steps)] + \
+                    (torch.randn(len(select_steps))*std)
+
+    input_batch = rearrange(input_batch, 'b c h -> b h c')  # back to [b, 150, 8]
+    return input_batch 
+
+
+def train_one_epoch_Ours_T_ClusterNoise(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        # normalization of the input batch
+        """
+        data_batch_mean = data_batch.mean(dim=1).unsqueeze(dim=1)
+        data_batch_std = data_batch.std(dim=1).unsqueeze(dim=1)
+        data_batch = (data_batch-data_batch_mean)/data_batch_std
+        """
+        """
+        data_batch_max = torch.max(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch_min = torch.min(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch = (data_batch - data_batch_min)/(data_batch_max-data_batch_min)
+        """
+        # randomly select the indexes from the data_batch and labels_batch  
+        b,_,_ = data_batch.shape
+        index = random.sample(range(b), int(b/2))
+        index_left = np.delete(np.arange(b), index)
+        data_batch_0 = torch.index_select(data_batch, 0, torch.LongTensor(index))
+        data_batch_1 = torch.index_select(data_batch, 0, torch.LongTensor(index_left))
+        labels_batch_0 = torch.index_select(labels_batch, 0, torch.LongTensor(index))
+        labels_batch_1 = torch.index_select(labels_batch, 0, torch.LongTensor(index_left))
+        # randomly add some noise to the input data_batch 
+        data_batch_2 = add_noise(data_batch_0, channel_num=4, step_num=30)
+        data_batch_3 = add_noise(data_batch_1, channel_num=4, step_num=30)
+
+        #  input shape of ours-T is [B, patches, patch_size]
+        data_batch_0 = data_batch_0.to(device) #put inputs to device
+        data_batch_1 = data_batch_1.to(device)
+        data_batch_2 = data_batch_2.to(device) #put inputs to device
+        data_batch_3 = data_batch_3.to(device)
+
+        labels_batch_0 = labels_batch_0.to(device)
+        labels_batch_1 = labels_batch_1.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_cls_0, output_batch_0 = model(data_batch_0)
+        output_cls_1, output_batch_1 = model(data_batch_1)
+        
+        output_cls_2, output_batch_2 = model(data_batch_2)
+        output_cls_3, output_batch_3 = model(data_batch_3)
+
+        #calculate loss
+        #loss: tensor (scalar) on gpu, torch.Size([])
+        clu_loss = 2/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+            -2/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum()
+
+        clu_loss_noise = 2/b * ( ((output_cls_0-output_cls_3)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+            + 2/b * ( ((output_cls_1-output_cls_2)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+            - 2/b * ( ((output_cls_0-output_cls_3)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum() \
+            - 2/b * ( ((output_cls_1-output_cls_2)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum()
+        
+        cls_loss = criterion(output_batch_0, labels_batch_0) + criterion(output_batch_1, labels_batch_1)
+        cls_loss_noise = criterion(output_batch_2, labels_batch_0) + criterion(output_batch_3, labels_batch_1)
+        #loss = 0.001*clu_loss + cls_loss + 0.001 * clu_loss_noise + cls_loss_noise # clustering and classification loss
+        loss = 0.001 * clu_loss + cls_loss + 0.001 * clu_loss_noise + 0.0 * cls_loss_noise # clustering and classification loss
+        # the loss weight of clu_ is about from 0.001 to 0.01 
+
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
+
+def train_one_epoch_Ours_T_ClusterNoise_1(model, optimizer, criterion, train_loader, device, epoch, flooding_level = [0.40, 0.38, 0.35]):
+    # this func is used for the training of fNIRS-T model with label-smoothing and flooding trick 
+    
+    model.train()
+    loss_avg = RunningAverage()
+    for i, (data_batch, labels_batch) in enumerate(train_loader):
+#         print('Inside train_one_epoch, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features]) in the 30s, sequence _length=150， num_features=8
+        #labels: tensor on cpu, torch.Size([batch_size])
+        
+        # normalization of the input batch
+        """
+        data_batch_mean = data_batch.mean(dim=1).unsqueeze(dim=1)
+        data_batch_std = data_batch.std(dim=1).unsqueeze(dim=1)
+        data_batch = (data_batch-data_batch_mean)/data_batch_std
+        """
+        """
+        data_batch_max = torch.max(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch_min = torch.min(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch = (data_batch - data_batch_min)/(data_batch_max-data_batch_min)
+        """
+        noise_standard = [2,2,2, 4,4, 6]
+        # if epoch is less than 10, we make the clustering without noise(if epoch%2!=0), else cluster with noise(if epoch%2==0)
+        if epoch < 12:
+            b,_,_ = data_batch.shape # randomly select the indexes from the data_batch and labels_batch  
+            index = random.sample(range(b), int(b/2))
+            index_left = np.delete(np.arange(b), index)
+            data_batch_0 = torch.index_select(data_batch, 0, torch.LongTensor(index))
+            data_batch_1 = torch.index_select(data_batch, 0, torch.LongTensor(index_left))
+            labels_batch_0 = torch.index_select(labels_batch, 0, torch.LongTensor(index))
+            labels_batch_1 = torch.index_select(labels_batch, 0, torch.LongTensor(index_left))
+            
+            if (epoch%2):
+                # randomly add some noise to the input data_batch 
+                data_batch_2 = add_noise(data_batch_0, channel_num= noise_standard[int(epoch/2)], step_num=15*noise_standard[int(epoch/2)])
+                data_batch_3 = add_noise(data_batch_1, channel_num= noise_standard[int(epoch/2)], step_num=15*noise_standard[int(epoch/2)])
+            
+            #  input shape of ours-T is [B, patches, patch_size]
+            data_batch_0 = data_batch_0.to(device) #put inputs to device
+            data_batch_1 = data_batch_1.to(device)
+            
+            labels_batch_0 = labels_batch_0.to(device)
+            labels_batch_1 = labels_batch_1.to(device) #when performing training, need to also put labels to device to do loss calculation and backpropagation
+
+            #forward pass
+            #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+            output_cls_0, output_batch_0 = model(data_batch_0)
+            output_cls_1, output_batch_1 = model(data_batch_1)
+            
+            #calculate loss
+            #loss: tensor (scalar) on gpu, torch.Size([])
+            clu_loss = 2/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+                -2/b * ( ((output_cls_0-output_cls_1)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum()
+            loss = 0.001 * clu_loss
+
+            if epoch%2 :
+                
+                data_batch_2 = data_batch_2.to(device) #put inputs to device
+                data_batch_3 = data_batch_3.to(device)
+                output_cls_2, output_batch_2 = model(data_batch_2)
+                output_cls_3, output_batch_3 = model(data_batch_3)
+
+                clu_loss_noise = 2/b * ( ((output_cls_0-output_cls_3)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+                    + 2/b * ( ((output_cls_1-output_cls_2)**2).sum(dim=1) * (labels_batch_0==labels_batch_1).float()).sum() \
+                    - 2/b * ( ((output_cls_0-output_cls_3)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum() \
+                    - 2/b * ( ((output_cls_1-output_cls_2)**2).sum(dim=1) * (labels_batch_0!=labels_batch_1).float()).sum()
+                
+                #cls_loss = criterion(output_batch_0, labels_batch_0) + criterion(output_batch_1, labels_batch_1)
+                #cls_loss_noise = criterion(output_batch_2, labels_batch_0) + criterion(output_batch_3, labels_batch_1)
+                #loss = 0.001*clu_loss + cls_loss + 0.001 * clu_loss_noise + cls_loss_noise # clustering and classification loss
+                loss = 0.001 * clu_loss_noise  # clustering and classification loss
+                # the loss weight of clu_ is about from 0.001 to 0.01 
+
+        elif(epoch >= 12):
+            data_batch = data_batch.to(device)
+            labels_batch = labels_batch.to(device)
+            output_cls, output_batch = model(data_batch)
+            cls_loss = criterion(output_batch, labels_batch)
+            loss = cls_loss
+
+        # Piecewise decay flooding. b is flooding level, b = 0 means no flooding
+        if epoch < 30:
+            b = flooding_level[0]
+        elif epoch < 50:
+            b = flooding_level[1]
+        else:
+            b = flooding_level[2]
+        
+        # flooding
+        loss = (loss - b).abs() + b
+
+        #update running average of the loss
+        loss_avg.update(loss.item())
+        
+        #clear previous gradients
+        optimizer.zero_grad()
+
+        #calculate gradient
+        loss.backward()
+        #perform parameters update
+        optimizer.step()
+    
+    average_loss_this_epoch = loss_avg()
+    return average_loss_this_epoch
 
 def eval_model_fNIRST(model, eval_loader, device):
     
@@ -371,6 +891,206 @@ def eval_model_fNIRST(model, eval_loader, device):
     
     return accuracy, class_predictions_array, labels_array, probabilities_array
 
+def eval_model_OursT(model, eval_loader, device):
+    
+    # evaluation for the ours-T models with an input of [B, patches, patch_size]
+    model.eval()
+    
+#     predicted_array = None # 1d numpy array, [batch_size * num_batches]
+    labels_array = None # 1d numpy array, [batch_size * num_batches]
+    probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
+    
+    for data_batch, labels_batch in eval_loader:#test_loader
+        # print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #labels: tensor on cpu, torch.Size([batch_size])
+       
+        # input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #extract data from torch variable, move to cpu, convert to numpy arrays    
+        if labels_array is None:
+#             label_array = labels.numpy()
+            labels_array = labels_batch.data.cpu().numpy()
+            
+        else:
+            labels_array = np.concatenate((labels_array, labels_batch.data.cpu().numpy()), axis=0)#np.concatenate without axis will flattened to 1d array
+        
+        
+        if probabilities_array is None:
+            probabilities_array = output_batch.data.cpu().numpy()
+        else:
+            probabilities_array = np.concatenate((probabilities_array, output_batch.data.cpu().numpy()), axis = 0) #concatenate on batch dimension: torch.Size([batch_size * num_batches, num_classes])
+            
+    class_predictions_array = probabilities_array.argmax(1)
+#     print('class_predictions_array.shape: {}'.format(class_predictions_array.shape))
+
+#     class_labels_array = onehot_labels_array.argmax(1)
+    labels_array = labels_array
+    accuracy = (class_predictions_array == labels_array).mean() * 100
+#     accuracy = (class_predictions_array == class_labels_array).mean() * 100
+    
+    
+    return accuracy, class_predictions_array, labels_array, probabilities_array
+
+
+def eval_model_OursT_Cluster(model, eval_loader, device):
+    
+    # evaluation for the ours-T models with an input of [B, patches, patch_size]
+    model.eval()
+    
+#     predicted_array = None # 1d numpy array, [batch_size * num_batches]
+    labels_array = None # 1d numpy array, [batch_size * num_batches]
+    probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
+    
+    for data_batch, labels_batch in eval_loader:#test_loader
+        # print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #labels: tensor on cpu, torch.Size([batch_size])
+       
+        # input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        _, output_batch = model(data_batch)
+        
+        #extract data from torch variable, move to cpu, convert to numpy arrays    
+        if labels_array is None:
+#             label_array = labels.numpy()
+            labels_array = labels_batch.data.cpu().numpy()
+            
+        else:
+            labels_array = np.concatenate((labels_array, labels_batch.data.cpu().numpy()), axis=0)#np.concatenate without axis will flattened to 1d array
+        
+        
+        if probabilities_array is None:
+            probabilities_array = output_batch.data.cpu().numpy()
+        else:
+            probabilities_array = np.concatenate((probabilities_array, output_batch.data.cpu().numpy()), axis = 0) #concatenate on batch dimension: torch.Size([batch_size * num_batches, num_classes])
+            
+    class_predictions_array = probabilities_array.argmax(1)
+#     print('class_predictions_array.shape: {}'.format(class_predictions_array.shape))
+
+#     class_labels_array = onehot_labels_array.argmax(1)
+    labels_array = labels_array
+    accuracy = (class_predictions_array == labels_array).mean() * 100
+#     accuracy = (class_predictions_array == class_labels_array).mean() * 100
+    
+    
+    return accuracy, class_predictions_array, labels_array, probabilities_array
+
+def eval_model_OursT_chunk(model, eval_loader, device):
+    
+    # evaluation for the ours-T models with an input of [B, patches, patch_size]
+    model.eval()
+    
+#     predicted_array = None # 1d numpy array, [batch_size * num_batches]
+    labels_array = None # 1d numpy array, [batch_size * num_batches]
+    probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
+    
+    for data_batch, labels_batch in eval_loader:#test_loader
+        # print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #labels: tensor on cpu, torch.Size([batch_size])
+       
+        # input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch, _ = model(data_batch)
+        
+        #extract data from torch variable, move to cpu, convert to numpy arrays    
+        if labels_array is None:
+#             label_array = labels.numpy()
+            labels_array = labels_batch[:,0].data.cpu().numpy()
+            
+        else:
+            labels_array = np.concatenate((labels_array, labels_batch[:,0].data.cpu().numpy()), axis=0)#np.concatenate without axis will flattened to 1d array
+        
+        
+        if probabilities_array is None:
+            probabilities_array = output_batch.data.cpu().numpy()
+        else:
+            probabilities_array = np.concatenate((probabilities_array, output_batch.data.cpu().numpy()), axis = 0) #concatenate on batch dimension: torch.Size([batch_size * num_batches, num_classes])
+            
+    class_predictions_array = probabilities_array.argmax(1)
+#     print('class_predictions_array.shape: {}'.format(class_predictions_array.shape))
+
+#     class_labels_array = onehot_labels_array.argmax(1)
+    labels_array = labels_array
+    accuracy = (class_predictions_array == labels_array).mean() * 100
+#     accuracy = (class_predictions_array == class_labels_array).mean() * 100
+    
+    
+    return accuracy, class_predictions_array, labels_array, probabilities_array
+
+def eval_model_OursT_Norm(model, eval_loader, device):
+    
+    # evaluation for the ours-T models with an input of [B, patches, patch_size]
+    model.eval()
+    
+#     predicted_array = None # 1d numpy array, [batch_size * num_batches]
+    labels_array = None # 1d numpy array, [batch_size * num_batches]
+    probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
+    
+    for data_batch, labels_batch in eval_loader:#test_loader
+        # print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
+        #labels: tensor on cpu, torch.Size([batch_size])
+       
+        # normalization of the input batch
+        """
+        data_batch_mean = data_batch.mean(dim=1).unsqueeze(dim=1)
+        data_batch_std = data_batch.std(dim=1).unsqueeze(dim=1)
+        data_batch = (data_batch-data_batch_mean)/data_batch_std
+        """
+        data_batch_max = torch.max(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch_min = torch.min(data_batch, dim=1)[0].unsqueeze(dim=1)
+        data_batch = (data_batch - data_batch_min)/(data_batch_max-data_batch_min)
+
+        # input shape of ours-T is [B, patches, patch_size]
+
+        data_batch = data_batch.to(device) #put inputs to device
+
+        #forward pass
+        #outputs: tensor on gpu, requires grad, torch.Size([batch_size, num_classes])
+        output_batch = model(data_batch)
+        
+        #extract data from torch variable, move to cpu, convert to numpy arrays    
+        if labels_array is None:
+#             label_array = labels.numpy()
+            labels_array = labels_batch.data.cpu().numpy()
+            
+        else:
+            labels_array = np.concatenate((labels_array, labels_batch.data.cpu().numpy()), axis=0)#np.concatenate without axis will flattened to 1d array
+        
+        
+        if probabilities_array is None:
+            probabilities_array = output_batch.data.cpu().numpy()
+        else:
+            probabilities_array = np.concatenate((probabilities_array, output_batch.data.cpu().numpy()), axis = 0) #concatenate on batch dimension: torch.Size([batch_size * num_batches, num_classes])
+            
+    class_predictions_array = probabilities_array.argmax(1)
+#     print('class_predictions_array.shape: {}'.format(class_predictions_array.shape))
+
+#     class_labels_array = onehot_labels_array.argmax(1)
+    labels_array = labels_array
+    accuracy = (class_predictions_array == labels_array).mean() * 100
+#     accuracy = (class_predictions_array == class_labels_array).mean() * 100
+    
+    
+    return accuracy, class_predictions_array, labels_array, probabilities_array
+
+
 def eval_model(model, eval_loader, device):
     
     #reference: https://github.com/cs230-stanford/cs230-code-examples/blob/master/pytorch/nlp/evaluate.py
@@ -382,7 +1102,7 @@ def eval_model(model, eval_loader, device):
     probabilities_array = None # 2d numpy array, [batch_size * num_batches, num_classes] 
     
     for data_batch, labels_batch in eval_loader:#test_loader
-        print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
+        # print('Inside eval_model, size of data_batch is {}'.format(data_batch.shape))
         #inputs: tensor on cpu, torch.Size([batch_size, sequence_length, num_features])
         #labels: tensor on cpu, torch.Size([batch_size])
        
@@ -417,7 +1137,100 @@ def eval_model(model, eval_loader, device):
     
     return accuracy, class_predictions_array, labels_array, probabilities_array
 
-   
+
+class EarlyStopping(object):
+    def __init__(self, monitor: str = 'val_loss', mode: str = 'min', patience: int = 1):
+        """
+        :param monitor: 要监测的指标，只有传入指标字典才会生效
+        :param mode: 监测指标的模式,min 或 max
+        :param patience: 最大容忍次数
+
+        example:
+
+        ```python
+        # Initialize
+        earlystopping = EarlyStopping(mode='max', patience=5)
+
+        # call
+        if earlystopping(val_accuracy):
+           return;
+
+        # save checkpoint
+
+        state = {
+            'model': model,
+            'earlystopping': earlystopping.state_dict(),
+            'optimizer': optimizer
+        }
+
+        torch.save(state, 'checkpoint.pth')
+
+        checkpoint = torch.load('checkpoint.pth')
+        earlystopping.load_state_dict(checkpoint['earlystopping'])
+        """
+        self.monitor = monitor
+        self.mode = mode
+        self.patience = patience
+        self.__value = -math.inf if mode == 'max' else math.inf
+        self.__times = 0
+
+    def state_dict(self) -> dict:
+        """:保存状态，以便下次加载恢复
+        torch.save(state_dict, path)
+        """
+        return {
+            'monitor': self.monitor,
+            'mode': self.mode,
+            'patience': self.patience,
+            'value': self.__value,
+            'times': self.__times
+        }
+
+    def load_state_dict(self, state_dict: dict):
+        """:加载状态
+        :param state_dict: 保存的状态
+        """
+        self.monitor = state_dict['monitor']
+        self.mode = state_dict['mode']
+        self.patience = state_dict['patience']
+        self.__value = state_dict['value']
+        self.__times = state_dict['times']
+
+    def reset(self):
+        """:重置次数
+        """
+        self.__times = 0
+
+    def __call__(self, metrics) -> bool:
+        """
+        :param metrics: 指标字典或数值标量
+        :return: 返回bool标量，True表示触发终止条件
+        """
+        if isinstance(metrics, dict):
+            metrics = metrics[self.monitor]
+
+        if (self.mode == 'min' and metrics <= self.__value) or (
+                self.mode == 'max' and metrics >= self.__value):
+            self.__value = metrics
+            self.__times = 0
+        else:
+            self.__times += 1
+        if self.__times >= self.patience:
+            return True
+        return False
+
+def softmax(X):
+    """
+    np softmax
+    """
+    assert(len(X.shape) == 2)
+    row_max = np.max(X, axis=1).reshape(-1, 1)
+    X -= row_max
+    X_exp = np.exp(X)
+    s = X_exp / np.sum(X_exp, axis=1, keepdims=True)
+
+    return s
+
 class RunningAverage():
     '''
     A class that maintains the running average of a quantity
@@ -564,9 +1377,10 @@ def bootstrapping(candidate_subjects, lookup_table, num_bootstrap_samples=5000, 
     
     accuracy_upper_percentile = np.percentile(bootstrap_accuracy_array, upper_percentile)
     accuracy_lower_percentile = np.percentile(bootstrap_accuracy_array, lower_percentile)
+    accuracy_median = np.percentile(bootstrap_accuracy_array, 50)
 
 #     return accuracy_upper_percentile, accuracy_lower_percentile, bootstrap_accuracy_df
-    return accuracy_upper_percentile, accuracy_lower_percentile
+    return accuracy_upper_percentile, accuracy_lower_percentile, accuracy_median
 
 
 def generic_GetTrainValTestSubjects(setting):
