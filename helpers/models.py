@@ -781,3 +781,81 @@ class Ours_T_1_4(nn.Module):
         y = self.mlp_head(x)
 
         return x, y  # return the cls feature x and the mlp classification output y
+    
+
+class DCNN(nn.Module):
+    """
+    model from paper: Dhulipalla V K, Khan M A A H. Mental workload classification from non-invasive fNIRs signals through deep convolutional neural network[C]
+        //2022 IEEE 46th Annual Computers, Software, and Applications Conference (COMPSAC). IEEE, 2022: 1450-1455.
+    It is a model for fNIRS mental workload classification, using tufts fNIRS2MW dataset. 
+    The code is written facilitated by new bing powered by GPT-4 according to the original paper.
+    """
+    
+    def __init__(self, dropout, n_class=2):
+        super(DCNN, self).__init__()
+        self.pretransform = nn.Sequential(
+            Rearrange('b h w -> b w h'),   # [b, 150, 8] -> [b, 8, 150]     
+        ) 
+        # First convolutional block
+        self.block1 = nn.Sequential(
+            nn.Conv2d(1, 25, kernel_size=(1, 5)),
+            nn.Conv2d(25, 25, kernel_size=(8, 1)),
+            nn.BatchNorm2d(25),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), ceil_mode=True),
+            nn.Dropout(p=dropout)
+        )
+        # Second convolutional block
+        self.block2 = nn.Sequential(
+            nn.Conv2d(25, 50, kernel_size=(1, 5)),
+            nn.BatchNorm2d(50),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), ceil_mode=True),
+            nn.Dropout(p=dropout)
+        )
+        # Third convolutional block
+        self.block3 = nn.Sequential(
+            nn.Conv2d(50, 100, kernel_size=(1, 5)),
+            nn.BatchNorm2d(100),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), ceil_mode=True),
+            nn.Dropout(p=dropout)
+        )
+        # Fourth convolutional block
+        self.block4 = nn.Sequential(
+            nn.Conv2d(100, 200, kernel_size=(1, 5)),
+            nn.BatchNorm2d(200),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), ceil_mode=True),
+            nn.Dropout(p=dropout)
+        )
+        # Fifth convolutional block
+        self.block5 = nn.Sequential(
+            nn.Conv2d(200, 152, kernel_size=(1, 5)),
+            nn.BatchNorm2d(152),
+            nn.ELU(),
+            nn.MaxPool2d(kernel_size=(1, 2), ceil_mode=True),
+            nn.Dropout(p=dropout)
+        )
+        # Sixth convolutional block
+        self.block6 = nn.Sequential(
+            nn.Conv2d(152, 152, kernel_size=(1, 1))
+        )
+        # Linear block for classification 
+        self.mlp = nn.Linear(152, n_class)
+
+    def forward(self, x):
+        x = repeat(self.pretransform(x), 'b w h -> b 1 w h')  # modify the x form
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.block6(x)
+        # Flatten the output of the last convolutional block
+        x = x.view(x.size(0), -1)
+        # Pass through the linear block for classification
+        out = self.mlp(x)
+        return F.log_softmax(out)
+
+        

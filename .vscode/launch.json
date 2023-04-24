@@ -95,6 +95,38 @@
             }
         },
         {
+            "name": "Python: run_DCNN.py",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${fileDirname}",
+            "program": "${workspaceFolder}/generic_models/run_DCNN.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--gpu_idx",
+                "1",
+                "--data_dir",
+                "/home/jyt/workspace/fNIRS_models/code_data_tufts/fNIRS2MW/experiment/fNIRS_data/band_pass_filtered/slide_window_data/size_30sec_150ts_stride_03ts/",
+                "--window_size",
+                "150",
+                "--classification_task",
+                "binary",
+                "--setting",
+                "4vs4_TestBucket1",
+                "--result_save_rootdir",
+                "${workspaceFolder}/experiments/generic_models/DCNN_debug/binary/4vs4/TestBucket1",
+                "--n_epoch",
+                "40",
+                "--restore_file",
+                "None",
+            ],
+            "env": {
+                "YOUR_PATH": "/home/jyt/workspace/fNIRS_models/code_data_tufts",
+                "scenario": "4vs4",
+                "bucket": "TestBucket1",
+            }
+        },
+        {
             "name": "Python: run_DeepConvNet_all.py",
             "type": "python",
             "request": "launch",
